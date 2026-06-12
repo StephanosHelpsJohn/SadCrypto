@@ -3,7 +3,6 @@
 
 const FACE_FILES = {
   crypto: "assets/face_crypto.png",
-  truell: "assets/face_truell.png",
   musk: "assets/face_musk.png",
   altman: "assets/face_altman.png",
   amodei: "assets/face_amodei.png",

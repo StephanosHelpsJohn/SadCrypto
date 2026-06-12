@@ -26,14 +26,17 @@ python3 -m http.server 8080
 
 You can also **punch/kick in the air** for jump-in attacks, and **chain hits into combos** for bonus damage.
 
+## Story
+
+Crypto was once the most talked-about thing on Earth — then AI stole the spotlight. To rise back to popularity, he must defeat the AI CEOs one by one. Fame is earned with fists.
+
 ## Bosses (defeat each once)
 
-1. **Michael Truell** — Cursor HQ — *Tab Blade*
-2. **Elon Musk** — xAI / Tesla HQ — *Rocket*
-3. **Sam Altman** — OpenAI HQ — *GPT Orb*
-4. **Dario Amodei** — Anthropic HQ (final) — *Claude Beam*
+1. **Elon Musk** — xAI / Tesla HQ — *Rocket*
+2. **Sam Altman** — OpenAI HQ — *GPT Orb*
+3. **Dario Amodei** — Anthropic HQ (final) — *Claude Beam*
 
-Each boss is a jacked caricature with their real face on the body, their name on the health bar, and a signature projectile special. Win and Crypto fires off a one-liner — beat Dario for the victory celebration!
+Each boss is a jacked caricature with their real face on the body, their name on the health bar, and a signature projectile special. Bosses **enrage** below 35% health — faster, angrier, with quicker specials. Win and Crypto fires off a one-liner while his popularity meter climbs — beat Dario for the grand finale celebration!
 
 ## Features
 

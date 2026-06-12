@@ -268,19 +268,6 @@ function drawAvatar(ctx, faceCanvas, x, y, size, accent, flip) {
   ctx.restore();
 }
 
-function drawWinPips(ctx, x, y, wins, color, align) {
-  for (let i = 0; i < 2; i++) {
-    const px = x + (align === "right" ? -i * 12 : i * 12);
-    ctx.beginPath();
-    ctx.arc(px, y, 4, 0, Math.PI * 2);
-    ctx.fillStyle = i < wins ? color : "#1a1a2e";
-    ctx.fill();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-}
-
 export function drawBossOrb(ctx, proj) {
   const { x, y, color, frame, r } = proj;
   ctx.save();

@@ -109,6 +109,15 @@ export class AudioEngine {
       case "select":
         this.tone(520, 0.06, "square", 0.2);
         break;
+      case "rage":
+        this.tone(160, 0.25, "sawtooth", 0.4, 60);
+        setTimeout(() => this.tone(110, 0.3, "sawtooth", 0.35, 50), 180);
+        setTimeout(() => this.noise(0.2, 0.25), 100);
+        break;
+      case "firework":
+        this.tone(700 + Math.random() * 400, 0.12, "square", 0.15, 200);
+        this.noise(0.15, 0.12);
+        break;
     }
   }
 

@@ -1,4 +1,4 @@
-import { BOSSES, ROUND_TIME } from "./config.js";
+import { BOSSES, ROUND_TIME, GROUND_Y } from "./config.js";
 import { Input } from "./input.js";
 import { AudioEngine } from "./audio.js";
 import { drawArena } from "./background.js";
@@ -17,7 +17,7 @@ import { faces } from "./assets.js";
 
 const GAME_STATES = {
   TITLE: "title",
-  INTRO: "intro",
+  STORY: "story",
   ANNOUNCE: "announce",
   FIGHT: "fight",
   KO: "ko",
@@ -56,6 +56,34 @@ export class Game {
     this.boss = null;
     this.bossAI = null;
     this.endingFrame = 0;
+    this.storyPanel = 0;
+    this.rageBanner = 0;
+    this.fireworks = [];
+    this.fwTimer = 0;
+
+    // CRT scanline pattern (pre-rendered for perf)
+    const sl = document.createElement("canvas");
+    sl.width = 4;
+    sl.height = 4;
+    const sctx = sl.getContext("2d");
+    sctx.fillStyle = "rgba(0,0,0,0.16)";
+    sctx.fillRect(0, 0, 4, 1);
+    this.scanPattern = this.ctx.createPattern(sl, "repeat");
+
+    // Vignette overlay (pre-rendered)
+    const vg = document.createElement("canvas");
+    vg.width = CANVAS_W;
+    vg.height = CANVAS_H;
+    const vctx = vg.getContext("2d");
+    const vgrad = vctx.createRadialGradient(
+      CANVAS_W / 2, CANVAS_H / 2, CANVAS_H * 0.45,
+      CANVAS_W / 2, CANVAS_H / 2, CANVAS_H * 0.9
+    );
+    vgrad.addColorStop(0, "rgba(0,0,0,0)");
+    vgrad.addColorStop(1, "rgba(0,0,0,0.5)");
+    vctx.fillStyle = vgrad;
+    vctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    this.vignette = vg;
   }
 
   get bossData() {
@@ -112,7 +140,17 @@ export class Game {
         if (this.input.wasPressed("start")) {
           this.audio.init();
           this.audio.resume();
-          this.startBoss(0);
+          this.audio.play("select");
+          this.storyPanel = 0;
+          this.state = GAME_STATES.STORY;
+        }
+        break;
+
+      case GAME_STATES.STORY:
+        if (this.input.wasPressed("start")) {
+          this.audio.play("select");
+          this.storyPanel++;
+          if (this.storyPanel >= 3) this.startBoss(0);
         }
         break;
 
@@ -167,9 +205,17 @@ export class Game {
       case GAME_STATES.ENDING:
         this.endingFrame += dt * 60;
         if (this.frame % 60 < 1) this.audio.play("cheer");
-        if (this.input.wasPressed("start")) {
+        // fireworks barrage
+        this.fwTimer -= dt;
+        if (this.fwTimer <= 0) {
+          this.spawnFirework();
+          this.fwTimer = 0.3 + Math.random() * 0.45;
+        }
+        this.updateFireworks(dt);
+        if (this.input.wasPressed("start") && this.endingFrame > 180) {
           this.state = GAME_STATES.TITLE;
           this.bossIndex = 0;
+          this.fireworks = [];
           this.audio.stopMusic();
         }
         break;
@@ -246,6 +292,24 @@ export class Game {
       (type) => this.audio.play(type),
       () => this.fireBossSpecial()
     );
+
+    // Rage mode: boss powers up below 35% HP
+    if (!b.enraged && b.hp <= b.maxHp * 0.35) {
+      b.enraged = true;
+      b.speed *= 1.3;
+      this.bossAI.ai = {
+        ...this.bossAI.ai,
+        aggression: Math.min(0.95, this.bossAI.ai.aggression + 0.18),
+      };
+      if (this.bossAI.special) {
+        this.bossAI.special = { ...this.bossAI.special, cooldown: this.bossAI.special.cooldown * 0.6 };
+      }
+      this.rageBanner = 1.8;
+      this.flash = Math.max(this.flash, 0.25);
+      this.shake = Math.max(this.shake, 0.35);
+      this.audio.play("rage");
+    }
+    if (this.rageBanner > 0) this.rageBanner -= dt;
 
     this.resolveAttacks(p, b);
     this.resolveAttacks(b, p);
@@ -353,6 +417,37 @@ export class Game {
     });
   }
 
+  spawnFirework() {
+    const colors = ["#ffd700", "#ff5e5e", "#5ec8ff", "#b15eff", "#7cfc00", "#ff9d2e"];
+    const x = 60 + Math.random() * (CANVAS_W - 120);
+    const y = 40 + Math.random() * 110;
+    const color = colors[(Math.random() * colors.length) | 0];
+    for (let i = 0; i < 26; i++) {
+      const a = (i / 26) * Math.PI * 2;
+      const sp = 1.4 + Math.random() * 1.8;
+      this.fireworks.push({
+        x, y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 0.7 + Math.random() * 0.4,
+        max: 1.1,
+        color,
+        size: 2 + Math.random() * 2,
+      });
+    }
+    this.audio.play("firework");
+  }
+
+  updateFireworks(dt) {
+    this.fireworks = this.fireworks.filter((p) => {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.045;
+      p.life -= dt;
+      return p.life > 0;
+    });
+  }
+
   spawnBitcoinStars(fighter) {
     for (let i = -1; i <= 1; i++) {
       this.projectiles.push(
@@ -383,6 +478,9 @@ export class Game {
       case GAME_STATES.TITLE:
         this.renderTitle(ctx);
         break;
+      case GAME_STATES.STORY:
+        this.renderStory(ctx);
+        break;
       case GAME_STATES.ANNOUNCE:
       case GAME_STATES.FIGHT:
       case GAME_STATES.KO:
@@ -402,41 +500,161 @@ export class Game {
       ctx.fillStyle = `rgba(255,255,255,${Math.min(0.6, this.flash)})`;
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
     }
+
+    // Retro post-processing: CRT scanlines + vignette
+    ctx.fillStyle = this.scanPattern;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.drawImage(this.vignette, 0, 0);
   }
 
   renderTitle(ctx) {
     const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
-    grad.addColorStop(0, "#0a0a1a");
-    grad.addColorStop(1, "#1a1040");
+    grad.addColorStop(0, "#05050c");
+    grad.addColorStop(0.5, "#150a30");
+    grad.addColorStop(1, "#2a1050");
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    drawCryptoFighter(ctx, CANVAS_W / 2, 260, 1, "idle", this.frame, 0);
+    // Sweeping spotlights converge on Crypto
+    for (let s = 0; s < 2; s++) {
+      const sweep = Math.sin(this.frame * 0.015 + s * Math.PI) * 150;
+      const lg = ctx.createLinearGradient(CANVAS_W / 2 + sweep, 0, CANVAS_W / 2, 160);
+      lg.addColorStop(0, "rgba(255,215,0,0.18)");
+      lg.addColorStop(1, "transparent");
+      ctx.fillStyle = lg;
+      ctx.beginPath();
+      ctx.moveTo(CANVAS_W / 2 + sweep - 30, 0);
+      ctx.lineTo(CANVAS_W / 2 + sweep + 30, 0);
+      ctx.lineTo(CANVAS_W / 2 + 60, 170);
+      ctx.lineTo(CANVAS_W / 2 - 60, 170);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Hero portrait
+    const face = faces.crypto;
+    if (face) {
+      const w = 96;
+      const h = w * (face.height / face.width);
+      ctx.save();
+      ctx.shadowColor = "#ffd700";
+      ctx.shadowBlur = 24 + Math.sin(this.frame * 0.08) * 8;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(face, CANVAS_W / 2 - w / 2, 14, w, h);
+      ctx.restore();
+    }
 
     ctx.textAlign = "center";
     ctx.fillStyle = "#ffd700";
-    ctx.font = "20px 'Press Start 2P', monospace";
+    ctx.font = "22px 'Press Start 2P', monospace";
     ctx.strokeStyle = "#6b21a8";
-    ctx.lineWidth = 4;
-    ctx.strokeText("SAD CRYPTO", CANVAS_W / 2, 80);
-    ctx.fillText("SAD CRYPTO", CANVAS_W / 2, 80);
-    ctx.font = "10px 'Press Start 2P', monospace";
+    ctx.lineWidth = 5;
+    ctx.strokeText("SAD CRYPTO", CANVAS_W / 2, 196);
+    ctx.fillText("SAD CRYPTO", CANVAS_W / 2, 196);
+    ctx.font = "9px 'Press Start 2P', monospace";
     ctx.fillStyle = "#a78bfa";
-    ctx.fillText("FIGHTER EDITION", CANVAS_W / 2, 110);
+    ctx.fillText("RISE TO FAME", CANVAS_W / 2, 218);
+
     ctx.font = "7px 'Press Start 2P', monospace";
     ctx.fillStyle = "#9ca3af";
     const lines = [
-      "Crypto vs 4 AI CEOs — beat each once",
-      "Z punch  X kick  C bitcoin special",
-      "Double-tap to dash · hold back to block",
+      "Forgotten by the world, Crypto fights",
+      "3 AI CEOs to win back the spotlight.",
       "",
-      "Press ENTER to fight",
+      "Z punch · X kick · C bitcoin special",
+      "Double-tap to dash · hold back to block",
     ];
-    let y = 150;
+    let y = 244;
     for (const l of lines) {
-      if (l.startsWith("Press") && Math.floor(Date.now() / 500) % 2) { y += 16; continue; }
+      ctx.fillText(l, CANVAS_W / 2, y);
+      y += 15;
+    }
+
+    if (Math.floor(Date.now() / 500) % 2 === 0) {
+      ctx.fillStyle = "#ffd700";
+      ctx.font = "9px 'Press Start 2P', monospace";
+      ctx.fillText("PRESS ENTER", CANVAS_W / 2, CANVAS_H - 18);
+    }
+  }
+
+  renderStory(ctx) {
+    const panels = [
+      {
+        title: "THE GLORY DAYS",
+        tint: "#1a1040",
+        lines: [
+          "Once, CRYPTO was the most talked-",
+          "about thing on Earth. Headlines.",
+          "Charts. Fans chanting his name.",
+        ],
+      },
+      {
+        title: "FORGOTTEN",
+        tint: "#0a0a12",
+        lines: [
+          "Then AI stole the spotlight.",
+          "No mentions. No headlines.",
+          "Nobody talks about Crypto anymore.",
+        ],
+      },
+      {
+        title: "THE COMEBACK",
+        tint: "#2e0d05",
+        lines: [
+          "To rise back to popularity, he must",
+          "defeat the AI CEOs one by one.",
+          "Fame is earned with fists.",
+        ],
+      },
+    ];
+    const p = panels[Math.min(this.storyPanel, 2)];
+
+    const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+    grad.addColorStop(0, "#05050c");
+    grad.addColorStop(1, p.tint);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // Portrait — dim and sad for panels 1-2, lit for the comeback
+    const face = faces.crypto;
+    if (face) {
+      const w = 110;
+      const h = w * (face.height / face.width);
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      if (this.storyPanel < 2) {
+        ctx.globalAlpha = 0.55;
+        ctx.filter = "grayscale(0.8)";
+      } else {
+        ctx.shadowColor = "#ffd700";
+        ctx.shadowBlur = 26;
+      }
+      ctx.drawImage(face, CANVAS_W / 2 - w / 2, 26, w, h);
+      ctx.restore();
+    }
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = this.storyPanel === 2 ? "#ffd700" : "#e5e7eb";
+    ctx.font = "14px 'Press Start 2P', monospace";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 4;
+    ctx.strokeText(p.title, CANVAS_W / 2, 220);
+    ctx.fillText(p.title, CANVAS_W / 2, 220);
+
+    ctx.font = "7px 'Press Start 2P', monospace";
+    ctx.fillStyle = "#cbd5e1";
+    let y = 248;
+    for (const l of p.lines) {
       ctx.fillText(l, CANVAS_W / 2, y);
       y += 16;
+    }
+
+    ctx.fillStyle = "#6b7280";
+    ctx.font = "6px 'Press Start 2P', monospace";
+    ctx.fillText(`${this.storyPanel + 1} / 3`, CANVAS_W / 2, CANVAS_H - 36);
+    if (Math.floor(Date.now() / 500) % 2 === 0) {
+      ctx.fillStyle = "#ffd700";
+      ctx.fillText("ENTER to continue", CANVAS_W / 2, CANVAS_H - 18);
     }
   }
 
@@ -451,6 +669,28 @@ export class Game {
     }
 
     drawArena(ctx, this.frame, bd);
+
+    // Soft drop shadows under the fighters
+    const drawShadow = (f, w) => {
+      if (!f) return;
+      const s = Math.max(0.35, 1 - (GROUND_Y - f.y) / 160);
+      ctx.fillStyle = "rgba(0,0,0,0.4)";
+      ctx.beginPath();
+      ctx.ellipse(f.x, GROUND_Y + 33, w * s, 6 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    drawShadow(this.player, 24);
+    drawShadow(this.boss, 30);
+
+    // Rage aura behind an enraged boss
+    if (this.boss?.enraged && this.boss.state !== STATES.KO) {
+      const pr = 60 + Math.sin(this.frame * 0.3) * 9;
+      const ag = ctx.createRadialGradient(this.boss.x, this.boss.y - 45, 8, this.boss.x, this.boss.y - 45, pr);
+      ag.addColorStop(0, "rgba(255,60,30,0.4)");
+      ag.addColorStop(1, "rgba(255,60,30,0)");
+      ctx.fillStyle = ag;
+      ctx.fillRect(this.boss.x - pr, this.boss.y - 45 - pr, pr * 2, pr * 2);
+    }
 
     if (this.player) drawCryptoFighter(ctx, this.player.x, this.player.y, this.player.facing, this.player.state, this.player.animFrame, this.player.hitFlash);
     if (this.boss) drawBossFighter(ctx, this.boss.x, this.boss.y, this.boss.facing, this.boss.state, this.boss.animFrame, bd, this.boss.hitFlash);
@@ -479,6 +719,20 @@ export class Game {
       ctx.lineWidth = 3;
       ctx.strokeText(`${this.combo} HITS`, 30, 110);
       ctx.fillText(`${this.combo} HITS`, 30, 110);
+      ctx.restore();
+    }
+
+    // Rage announcement
+    if (this.rageBanner > 0 && this.state === GAME_STATES.FIGHT) {
+      ctx.save();
+      ctx.textAlign = "center";
+      const rp = 1 + Math.sin(this.frame * 0.5) * 0.08;
+      ctx.font = `${Math.round(13 * rp)}px 'Press Start 2P', monospace`;
+      ctx.fillStyle = "#ff3b30";
+      ctx.strokeStyle = "#000";
+      ctx.lineWidth = 4;
+      ctx.strokeText(`${bd.shortName} IS ENRAGED!`, CANVAS_W / 2, 78);
+      ctx.fillText(`${bd.shortName} IS ENRAGED!`, CANVAS_W / 2, 78);
       ctx.restore();
     }
 
@@ -541,8 +795,31 @@ export class Game {
     if (this.maxCombo >= 3) {
       ctx.fillStyle = "#a78bfa";
       ctx.font = "6px 'Press Start 2P', monospace";
-      ctx.fillText(`Best combo: ${this.maxCombo} hits`, CANVAS_W / 2, by + boxH + 60);
+      ctx.fillText(`Best combo: ${this.maxCombo} hits`, CANVAS_W / 2, by + boxH + 58);
     }
+
+    // Popularity rising — the comeback meter
+    const pct = Math.round(((this.bossIndex + 1) / BOSSES.length) * 100);
+    const animPct = Math.min(pct, Math.round(this.victoryTimer * 60));
+    const mw = 240;
+    const mx = CANVAS_W / 2 - mw / 2;
+    const my = by + boxH + 70;
+    ctx.fillStyle = "#9ca3af";
+    ctx.font = "6px 'Press Start 2P', monospace";
+    ctx.fillText("WORLD POPULARITY", CANVAS_W / 2, my - 4);
+    ctx.fillStyle = "#1a1a2e";
+    ctx.fillRect(mx, my, mw, 12);
+    const mg = ctx.createLinearGradient(mx, 0, mx + mw, 0);
+    mg.addColorStop(0, "#fde047");
+    mg.addColorStop(1, "#f59e0b");
+    ctx.fillStyle = mg;
+    ctx.fillRect(mx + 2, my + 2, (mw - 4) * (animPct / 100), 8);
+    ctx.strokeStyle = "#ffd700";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(mx, my, mw, 12);
+    ctx.fillStyle = "#ffd700";
+    ctx.font = "7px 'Press Start 2P', monospace";
+    ctx.fillText(`${animPct}%`, CANVAS_W / 2, my + 24);
 
     if (this.victoryTimer > 0.6 && Math.floor(Date.now() / 500) % 2 === 0) {
       ctx.fillStyle = "#9ca3af";
@@ -562,23 +839,113 @@ export class Game {
   }
 
   renderEnding(ctx) {
-    drawArena(ctx, this.endingFrame, { themeKey: "anthropic", company: "CRYPTO", arena: "CRYPTO WORLD TOUR", staff: ["Fans", "Press", "Critics", "Legends", "The World"] });
-    drawCryptoFighter(ctx, CANVAS_W / 2, 260, 1, "idle", this.endingFrame, 0);
+    const t = this.endingFrame / 60;
+    drawArena(ctx, this.endingFrame, {
+      themeKey: "openai",
+      company: "CRYPTO",
+      arena: "WORLD COMEBACK TOUR",
+      staff: ["Super Fans", "Paparazzi", "The Press", "Old Friends", "New Fans"],
+    });
 
-    // Confetti
-    for (let i = 0; i < 50; i++) {
-      const cx = (i * 37 + this.endingFrame * 3) % CANVAS_W;
-      const cy = (i * 23 + this.endingFrame * 2) % 200;
-      ctx.fillStyle = ["#ffd700", "#ef4444", "#22d3ee", "#a855f7"][i % 4];
-      ctx.fillRect(cx, cy, 5, 5);
+    // Paparazzi camera flashes in the crowd
+    for (let i = 0; i < 3; i++) {
+      if (Math.random() < 0.28) {
+        const fx = 20 + Math.random() * (CANVAS_W - 40);
+        const fy = 158 + Math.random() * 46;
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.beginPath();
+        ctx.arc(fx, fy, 2 + Math.random() * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
-    drawAnnouncerText(ctx, "CRYPTO WINS!", "The world celebrates! Crypto is famous again!");
-    ctx.font = "6px 'Press Start 2P', monospace";
-    ctx.fillStyle = "#9ca3af";
+    // Fireworks
+    for (const p of this.fireworks) {
+      ctx.globalAlpha = Math.max(0, p.life / p.max);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+
+    // Crypto moonwalks across the stage (faces opposite to his motion)
+    const cx = CANVAS_W / 2 + Math.sin(t * 1.1) * 130;
+    const facing = Math.cos(t * 1.1) > 0 ? -1 : 1;
+    // spotlight follows him
+    const sg = ctx.createRadialGradient(cx, GROUND_Y - 40, 10, cx, GROUND_Y - 40, 90);
+    sg.addColorStop(0, "rgba(255,215,0,0.25)");
+    sg.addColorStop(1, "transparent");
+    ctx.fillStyle = sg;
+    ctx.fillRect(cx - 90, GROUND_Y - 130, 180, 180);
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    ctx.beginPath();
+    ctx.ellipse(cx, GROUND_Y + 33, 24, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    drawCryptoFighter(ctx, cx, GROUND_Y, facing, "walk", this.endingFrame, 0);
+
+    // Confetti rain
+    for (let i = 0; i < 60; i++) {
+      const cfx = (i * 37 + this.endingFrame * 2.5) % CANVAS_W;
+      const cfy = (i * 23 + this.endingFrame * (1.5 + (i % 3))) % CANVAS_H;
+      ctx.fillStyle = ["#ffd700", "#ef4444", "#22d3ee", "#a855f7", "#7cfc00"][i % 5];
+      ctx.fillRect(cfx, cfy, 4, 4);
+    }
+
+    // Breaking-news ticker
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillRect(0, 0, CANVAS_W, 16);
+    ctx.font = "8px 'Press Start 2P', monospace";
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#ffd700";
+    const msg = "* CRYPTO #1 TRENDING WORLDWIDE * AI CEOS SPEECHLESS * EVERYONE IS TALKING ABOUT CRYPTO AGAIN * FAME METER BROKEN ";
+    const tw = ctx.measureText(msg).width;
+    const off = (this.endingFrame * 1.4) % tw;
+    ctx.fillText(msg, -off, 11);
+    ctx.fillText(msg, -off + tw, 11);
+
+    // Big pulsing headline
     ctx.textAlign = "center";
-    if (Math.floor(Date.now() / 500) % 2 === 0) {
-      ctx.fillText("Press ENTER to play again", CANVAS_W / 2, CANVAS_H - 30);
+    const pulse = 1 + Math.sin(t * 4) * 0.06;
+    ctx.font = `${Math.round(14 * pulse)}px 'Press Start 2P', monospace`;
+    ctx.shadowColor = "#ffd700";
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = "#ffd700";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 4;
+    ctx.strokeText("CRYPTO IS FAMOUS AGAIN!", CANVAS_W / 2, 44);
+    ctx.fillText("CRYPTO IS FAMOUS AGAIN!", CANVAS_W / 2, 44);
+    ctx.shadowBlur = 0;
+
+    // Popularity meter charging to MAX
+    const fill = Math.min(1, t / 4);
+    const mw = 320;
+    const mx = CANVAS_W / 2 - mw / 2;
+    const my = CANVAS_H - 26;
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(mx - 4, my - 14, mw + 8, 34);
+    ctx.fillStyle = "#9ca3af";
+    ctx.font = "6px 'Press Start 2P', monospace";
+    ctx.fillText("WORLD POPULARITY", CANVAS_W / 2, my - 4);
+    ctx.fillStyle = "#1a1a2e";
+    ctx.fillRect(mx, my, mw, 12);
+    const mg = ctx.createLinearGradient(mx, 0, mx + mw, 0);
+    mg.addColorStop(0, "#fde047");
+    mg.addColorStop(1, "#f59e0b");
+    ctx.fillStyle = mg;
+    ctx.fillRect(mx + 2, my + 2, (mw - 4) * fill, 8);
+    ctx.strokeStyle = "#ffd700";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(mx, my, mw, 12);
+    if (fill >= 1 && Math.floor(Date.now() / 300) % 2 === 0) {
+      ctx.fillStyle = "#ffd700";
+      ctx.font = "8px 'Press Start 2P', monospace";
+      ctx.fillText("MAX FAME!", CANVAS_W / 2, my + 11);
+    }
+
+    // Restart prompt after the celebration has had a moment
+    if (t > 3 && Math.floor(Date.now() / 500) % 2 === 0) {
+      ctx.fillStyle = "#e5e7eb";
+      ctx.font = "7px 'Press Start 2P', monospace";
+      ctx.fillText("Press ENTER to play again", CANVAS_W / 2, 62);
     }
   }
 
